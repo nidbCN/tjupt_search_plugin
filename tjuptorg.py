@@ -1,18 +1,18 @@
 #VERSION: 1.00
-#AUTHORS: Gaein nidb (mail@gaein.cn)
+# AUTHORS: Gaein nidb (mail@gaein.cn)
 
 # Open source under GPL v3
 
-from json import encoder
 from helpers import download_file, retrieve_url
 from novaprinter import prettyPrinter
-import sgmllib
+# import sgmllib
 # some other imports if necessary
 import requests
 import json
 
+
 class tjuptorg(object):
-    
+
     """
     `url`, `name`, `supported_categories` should be static variables of the engine_name class,
      otherwise qbt won't install the plugin.
@@ -24,7 +24,8 @@ class tjuptorg(object):
     """
     url = 'https://github.com/nidbCN/tjupt_search_plugin'
     name = 'Search plugin for tjupt'
-    supported_categories = {'all': '0', 'movies': '6', 'tv': '4', 'music': '1', 'games': '2', 'anime': '7', 'software': '3'}
+    supported_categories = {'all': '0', 'movies': '6', 'tv': '4',
+                            'music': '1', 'games': '2', 'anime': '7', 'software': '3'}
 
     base_url = "https://tjupt.org/"
 
@@ -32,33 +33,36 @@ class tjuptorg(object):
         self.__username = ""
         self.__password = ""
         self.__cookie = ""
+        self.__header = {
+            "User-Agent", "python-requests(TJUPT search plugin for qBitorrent / version 0.1)"}
         """
         some initialization
         """
 
     def __get_cookie(self) -> str:
         FILENAME = "tjupt.json"
-        with open(FILENAME) as config_file:
+        with open(FILENAME, mode="w+", encoding="utf8") as config_file:
             config_json = json.load(config_file)
-            if "cookie" in config_file:
-                __cookie = config_file["cookie"]
+            if "cookie" in config_json:
+                self.__cookie = config_json["cookie"]
             else:
-                login_resp = requests.post(self.base_url + "takelogin.php", data = {
+                login_resp = requests.post(self.base_url + "takelogin.php", data={
                     "username": self.__username,
                     "password": self.__password,
-                    "logout": "90days"
-                })
-                
-                self.__cookie = login_resp.headers["set-cookie"].split(';')[0]
+                    "logout": "360days"
+                }, headers=self.__header, allow_redirects=False)
 
+                if "access_token" in login_resp.cookies:
+                    self.__set_cookie(self, login_resp.cookies["access_token"])
+        config_file.close()
+        
         return self.__cookie
 
     def __set_cookie(self, cookie: str) -> None:
         FILENAME = "tjupt.json"
-        with open(FILENAME, encoding="utf8") as config_file:
+        with open(FILENAME, mode="r", encoding="utf8") as config_file:
             json.dump({"cookie": cookie}, config_file, ensure_ascii=False)
-            config_file.close()
-
+            self.__cookie = cookie
 
     def download_torrent(self, info):
         """
@@ -67,7 +71,7 @@ class tjuptorg(object):
         implementation in case the search engine in question does not allow
         traditional downloads (for example, cookie-based download).
         """
-        print download_file(info)
+        print(download_file(info))
 
     # DO NOT CHANGE the name and parameters of this function
     # This function will be the one called by nova2.py
