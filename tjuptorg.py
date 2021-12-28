@@ -9,9 +9,100 @@ from novaprinter import prettyPrinter
 # some other imports if necessary
 
 import os
+import re
 import json
 from urllib import request
 from urllib import parse
+from html.parser import HTMLParser
+
+BASE_URL = "https://tjupt.org/"
+
+
+class TjuptHtmlParser(HTMLParser):
+    info_dict_list: dict
+
+    in_list_table: bool
+    in_title_table: bool
+    in_title_td: bool
+    in_seeder_td: bool
+    in_downloaders_td: bool
+    in_size_td: bool
+
+    td_others_count: int
+    td_title_count: int
+
+    def __init__(self) -> None:
+        HTMLParser.__init__(self)
+        self.in_list_table = False
+        self.in_title_table = False
+        self.in_title_td = False
+        self.in_seeder_td = False
+        self.in_size_td = False
+        self.in_downloaders_td = False
+        self.td_others_count = 0
+        self.td_title_count = 0
+        self.info_dict_list = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "table":
+            if ("class", "torrents") in attrs:
+                self.in_list_table = True
+            elif ("class", "torrentname") in attrs:
+                self.in_title_table = True
+        elif tag == "td":
+            if self.in_title_table and ("class", "embedded") in attrs:
+                if self.td_title_count == 1:
+                    # td element which contains title and link
+                    self.in_title_td = True
+                self.td_title_count = self.td_title_count + 1
+            elif self.in_list_table and ("class", "rowfollow") in attrs:
+                if self.td_others_count == 3:
+                    # td element which contains file size
+                    self.in_size_td = True
+                elif self.td_others_count == 4:
+                    # td element which contains seeders
+                    self.in_seeder_td = True
+                elif self.td_others_count == 5:
+                    # td element which contains downloaders
+                    self.in_downloaders_td = True
+                self.td_others_count = self.td_others_count + 1
+        elif tag == "a" and self.in_title_td:
+            url = BASE_URL + attrs[1][1]
+            title = attrs[0][1]
+            self.info_dict_list.append({
+                "link": url,
+                "name": title
+            })
+
+    def handle_endtag(self, tag):
+        if tag == "table":
+            if self.in_title_table:
+                self.in_title_table = False
+                self.td_title_count = 0
+            elif self.in_list_table:
+                # go next table
+                self.in_list_table = False
+                self.td_others_count = 0
+
+        elif tag == "td":
+            if self.in_title_td:
+                self.in_title_td = False
+            elif self.in_size_td:
+                self.in_size_td = False
+            elif self.in_seeder_td:
+                self.in_seeder_td = False
+            elif self.in_downloaders_td:
+                self.in_downloaders_td = False
+
+    def handle_data(self, data):
+        last_dict = self.info_dict_list[-1]
+        if self.in_size_td:
+            last_dict["size"] = str(data).replace("<br>", " ")
+        elif self.in_seeder_td:
+            last_dict["seeds"] = str(data)
+        elif self.in_downloaders_td:
+            last_dict["leech"] = str(data)
+        last_dict["engine_url"] = BASE_URL
 
 
 class NoRedirHandler(request.HTTPRedirectHandler):
@@ -40,7 +131,6 @@ class tjuptorg(object):
                             "anime": True,
                             "software": True, }
 
-    base_url = "https://tjupt.org/"
     user_agent = "TJUPT_search_plugin/0.1 (use Python-urllib, for qBitorrnt search)"
 
     def __init__(self):
@@ -69,7 +159,7 @@ class tjuptorg(object):
             req_opener.addheaders = [
                 ("User-Agent", self.user_agent)]
             login_resp = req_opener.open(
-                self.base_url + "takelogin.php", data=parse.urlencode(payload).encode("utf-8"))
+                BASE_URL + "takelogin.php", data=parse.urlencode(payload).encode("utf-8"))
             cookies = login_resp.getheader("Set-Cookie")
             if cookies is not None:
                 cookie_list = cookies.split(';')
@@ -121,7 +211,7 @@ class tjuptorg(object):
             param_dcit[tjupt_cat[cat]] = 1
 
         search_req = request.Request(
-            self.base_url + "torrents.php?" + parse.urlencode(param_dcit),
+            BASE_URL + "torrents.php?" + parse.urlencode(param_dcit),
             headers={
                 "Cookie": self.__get_cookie(),
                 "User-Agent": self.user_agent
@@ -129,5 +219,10 @@ class tjuptorg(object):
 
         search_resp = request.urlopen(search_req)
         if search_resp.code == 200:
-            print(search_resp.read().decode('utf-8'))
+            search_result_html = search_resp.read().decode('utf-8')
+            print(type(search_result_html))
+            search_parser = TjuptHtmlParser()
+            search_parser.feed(search_result_html)
+            search_parser.close()
+
             prettyPrinter()
