@@ -9,7 +9,6 @@ from novaprinter import prettyPrinter
 # some other imports if necessary
 
 import os
-import re
 import json
 from urllib import request
 from urllib import parse
@@ -19,29 +18,40 @@ BASE_URL = "https://tjupt.org/"
 
 
 class TjuptHtmlParser(HTMLParser):
+    """Parse tjupt result page
+
+    This class is a holy shit, do not try to understand it
+    I cannot use bs in plugin
+    """
     info_dict_list: dict
 
     in_list_table: bool
     in_title_table: bool
+    in_list_tr: bool
     in_title_td: bool
     in_seeder_td: bool
     in_downloaders_td: bool
     in_size_td: bool
+    in_disabled: bool
 
     td_others_count: int
     td_title_count: int
 
-    def __init__(self) -> None:
+    has_next_page: bool
+
+    def __init__(self, dict_list: list) -> None:
         HTMLParser.__init__(self)
         self.in_list_table = False
         self.in_title_table = False
+        self.in_list_tr = False
         self.in_title_td = False
         self.in_seeder_td = False
         self.in_size_td = False
         self.in_downloaders_td = False
+        self.in_disabled = False
         self.td_others_count = 0
         self.td_title_count = 0
-        self.info_dict_list = None
+        self.info_dict_list = dict_list
 
     def handle_starttag(self, tag, attrs):
         if tag == "table":
@@ -49,6 +59,9 @@ class TjuptHtmlParser(HTMLParser):
                 self.in_list_table = True
             elif ("class", "torrentname") in attrs:
                 self.in_title_table = True
+        elif tag == "tr":
+            if self.in_list_table and not self.in_title_table:
+                self.in_list_tr = True
         elif tag == "td":
             if self.in_title_table and ("class", "embedded") in attrs:
                 if self.td_title_count == 1:
@@ -71,19 +84,30 @@ class TjuptHtmlParser(HTMLParser):
             title = attrs[0][1]
             self.info_dict_list.append({
                 "link": url,
-                "name": title
+                "name": title,
+                "size": "Unknow",
+                "seeds": "Unknow",
+                "leech": "Unknow",
+                "engine_url": BASE_URL
             })
+        elif tag == "font":
+            if ("class", "gray") in attrs:
+                self.in_disabled = True
+        elif tag == "b":
+            if ("title", "Alt+Pagedown") in attrs and not self.in_disabled:
+                self.has_next_page = True
 
     def handle_endtag(self, tag):
         if tag == "table":
             if self.in_title_table:
                 self.in_title_table = False
                 self.td_title_count = 0
-            elif self.in_list_table:
-                # go next table
-                self.in_list_table = False
-                self.td_others_count = 0
-
+        elif tag == "tr":
+            if self.in_list_tr:
+                if self.in_list_table and not self.in_title_table:
+                    # go next table
+                    self.in_list_tr = False
+                    self.td_others_count = 0
         elif tag == "td":
             if self.in_title_td:
                 self.in_title_td = False
@@ -93,16 +117,21 @@ class TjuptHtmlParser(HTMLParser):
                 self.in_seeder_td = False
             elif self.in_downloaders_td:
                 self.in_downloaders_td = False
+        elif tag == "font":
+            if self.in_disabled:
+                self.in_disabled = False
 
     def handle_data(self, data):
-        last_dict = self.info_dict_list[-1]
         if self.in_size_td:
-            last_dict["size"] = str(data).replace("<br>", " ")
+            self.info_dict_list[-1]["size"] = str(data).replace("<br>", " ")
         elif self.in_seeder_td:
-            last_dict["seeds"] = str(data)
+            self.info_dict_list[-1]["seeds"] = str(data)
         elif self.in_downloaders_td:
-            last_dict["leech"] = str(data)
-        last_dict["engine_url"] = BASE_URL
+            self.info_dict_list[-1]["leech"] = str(data)
+
+    def parse_search(self, html_str: str) -> bool:
+        self.feed(html_str)
+        self.close()
 
 
 class NoRedirHandler(request.HTTPRedirectHandler):
@@ -112,16 +141,6 @@ class NoRedirHandler(request.HTTPRedirectHandler):
 
 
 class tjuptorg(object):
-
-    """
-    `url`, `name`, `supported_categories` should be static variables of the engine_name class,
-     otherwise qbt won't install the plugin.
-
-    `url`: The URL of the search engine.
-    `name`: The name of the search engine, spaces and special characters are allowed here.
-    `supported_categories`: What categories are supported by the search engine and their corresponding id,
-    possible categories are ('all', 'movies', 'tv', 'music', 'games', 'anime', 'software', 'pictures', 'books').
-    """
     url = 'https://github.com/nidbCN/tjupt_search_plugin'
     name = 'Search plugin for tjupt'
     supported_categories = {"movies": True,
@@ -185,15 +204,6 @@ class tjuptorg(object):
     # DO NOT CHANGE the name and parameters of this function
     # This function will be the one called by nova2.py
     def search(self, what, cat='all'):
-        """
-        Here you can do what you want to get the result from the search engine website.
-        Everytime you parse a result line, store it in a dictionary
-        and call the prettyPrint(your_dict) function.
-
-        `what` is a string with the search tokens, already escaped (e.g. "Ubuntu+Linux")
-        `cat` is the name of a search category in ('all', 'movies', 'tv', 'music', 'games', 'anime', 'software', 'pictures', 'books')
-        """
-
         tjupt_cat = {
             "movies": "cat401",
             "tv": "cat402",
@@ -210,19 +220,25 @@ class tjuptorg(object):
         if cat in tjupt_cat:
             param_dcit[tjupt_cat[cat]] = 1
 
-        search_req = request.Request(
-            BASE_URL + "torrents.php?" + parse.urlencode(param_dcit),
-            headers={
-                "Cookie": self.__get_cookie(),
-                "User-Agent": self.user_agent
-            })
+        has_next_page = True
+        page_number = 0
 
-        search_resp = request.urlopen(search_req)
-        if search_resp.code == 200:
-            search_result_html = search_resp.read().decode('utf-8')
-            print(type(search_result_html))
-            search_parser = TjuptHtmlParser()
-            search_parser.feed(search_result_html)
-            search_parser.close()
+        while has_next_page:
+            param_dcit["page"] = page_number
+            search_req = request.Request(
+                BASE_URL + "torrents.php?" + parse.urlencode(param_dcit),
+                headers={
+                    "Cookie": self.__get_cookie(),
+                    "User-Agent": self.user_agent
+                })
 
-            prettyPrinter()
+            search_resp = request.urlopen(search_req)
+            if search_resp.code == 200:
+                search_result_html = search_resp.read().decode('utf-8')
+                result_dict_list = []
+                search_parser = TjuptHtmlParser(result_dict_list)
+                has_next_page = search_parser.parse_search(search_result_html)
+                for info_dict in result_dict_list:
+                    prettyPrinter(info_dict)
+            else:
+                has_next_page = False
