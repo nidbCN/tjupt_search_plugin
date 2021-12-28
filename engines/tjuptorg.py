@@ -3,15 +3,14 @@
 
 # Open source under GPL v3
 
-from helpers import download_file, retrieve_url
+from helpers import download_file
 from novaprinter import prettyPrinter
 # import sgmllib
 # some other imports if necessary
 
 import os
 import json
-from urllib import request
-from urllib import parse
+from urllib import request, parse
 from html.parser import HTMLParser
 
 BASE_URL = "https://tjupt.org/"
@@ -23,7 +22,7 @@ class TjuptHtmlParser(HTMLParser):
     This class is a holy shit, do not try to understand it
     I cannot use bs in plugin
     """
-    info_dict_list: dict
+    info_dict: dict
 
     in_list_table: bool
     in_title_table: bool
@@ -39,7 +38,7 @@ class TjuptHtmlParser(HTMLParser):
 
     has_next_page: bool
 
-    def __init__(self, dict_list: list) -> None:
+    def __init__(self) -> None:
         HTMLParser.__init__(self)
         self.in_list_table = False
         self.in_title_table = False
@@ -51,7 +50,14 @@ class TjuptHtmlParser(HTMLParser):
         self.in_disabled = False
         self.td_others_count = 0
         self.td_title_count = 0
-        self.info_dict_list = dict_list
+        self.info_dict = {
+            "link": "Unknow",
+            "name": "Unknow",
+            "size": "Unknow",
+            "seeds": "Unknow",
+            "leech": "Unknow",
+            "engine_url": BASE_URL
+        }
 
     def handle_starttag(self, tag, attrs):
         if tag == "table":
@@ -82,14 +88,14 @@ class TjuptHtmlParser(HTMLParser):
         elif tag == "a" and self.in_title_td:
             url = BASE_URL + attrs[1][1]
             title = attrs[0][1]
-            self.info_dict_list.append({
+            self.info_dict = {
                 "link": url,
                 "name": title,
                 "size": "Unknow",
                 "seeds": "Unknow",
                 "leech": "Unknow",
                 "engine_url": BASE_URL
-            })
+            }
         elif tag == "font":
             if ("class", "gray") in attrs:
                 self.in_disabled = True
@@ -123,11 +129,12 @@ class TjuptHtmlParser(HTMLParser):
 
     def handle_data(self, data):
         if self.in_size_td:
-            self.info_dict_list[-1]["size"] = str(data).replace("<br>", " ")
+            self.info_dict["size"] = str(data).replace("<br>", " ")
         elif self.in_seeder_td:
-            self.info_dict_list[-1]["seeds"] = str(data)
+            self.info_dic["seeds"] = str(data)
         elif self.in_downloaders_td:
-            self.info_dict_list[-1]["leech"] = str(data)
+            self.info_dict["leech"] = str(data)
+            prettyPrinter(self.info_dict)
 
     def parse_search(self, html_str: str) -> bool:
         self.feed(html_str)
@@ -141,8 +148,8 @@ class NoRedirHandler(request.HTTPRedirectHandler):
 
 
 class tjuptorg(object):
-    url = 'https://github.com/nidbCN/tjupt_search_plugin'
-    name = 'Search plugin for tjupt'
+    url = BASE_URL
+    name = '北洋媛PT / TJUPT'
     supported_categories = {"movies": True,
                             "tv": True,
                             "music": True,
@@ -235,10 +242,7 @@ class tjuptorg(object):
             search_resp = request.urlopen(search_req)
             if search_resp.code == 200:
                 search_result_html = search_resp.read().decode('utf-8')
-                result_dict_list = []
-                search_parser = TjuptHtmlParser(result_dict_list)
+                search_parser = TjuptHtmlParser()
                 has_next_page = search_parser.parse_search(search_result_html)
-                for info_dict in result_dict_list:
-                    prettyPrinter(info_dict)
             else:
                 has_next_page = False
